@@ -1,0 +1,63 @@
+
+
+1) Steps (do this)
+  1.  Refactor the pipeline into steps
+Define clear stages (example):
+  1.  validate & normalize inputs →
+  2.  fetch/scrape pages →
+  3.  extract & chunk knowledge →
+  4.  generate descriptions/prompts →
+  5.  create agents →
+  6.  upload knowledge to agent →
+  7.  finalize & save agent_id.
+
+
+Give each step a weight that sums to 100 (e.g., 5, 35, 15, 15, 10, 15, 5).
+  2.  Choose a background runner (pick one)
+  •  Fastest path (async-native): Arq (async Redis worker).
+  •  Most common: Celery (works great with Redis/RabbitMQ).
+  •  Simple dev-only: FastAPI BackgroundTasks + in-memory store (not for multiple servers).
+
+
+  3.  Return immediately with a task id
+Your POST /agents endpoint enqueues a job and returns:
+{ task_id, state: "QUEUED", percent: 0 }.
+(Treat task_id as your “process id”—don’t use OS PIDs.)
+
+
+  4.  Track progress (percent)
+  •  Keep a small Task State record in Redis/DB:
+{ state, percent, current_step, details, agent_id? }.
+  •  At the start of each step, set current_step and bump percent by the step’s weight as subtasks complete.
+  •  For loops (e.g., scraping N pages): compute per_page = step_weight / N and add it atomically as each page finishes.
+  •  On errors, set state="FAILED" and include error_message.
+
+
+  5.  Expose progress
+  •  Add GET /tasks/{task_id} → returns the Task State JSON.
+  •  Optional real-time: SSE at /tasks/{task_id}/events to push updates as you write progress.
+
+
+  6.  Finish & return agent id
+When the last step completes, set:
+state="SUCCESS", percent=100, and store agent_id in the same record so the status endpoint returns it.
+
+
+  7.  Make it robust
+  •  Idempotency: accept a client-provided idempotency_key; if the same request repeats, return the existing task_id.
+  •  Retries: configure retries with backoff for flaky steps (network, scraping).
+  •  Timeouts: set per-step timeouts; mark as FAILED on exceed.
+  •  Cancellation (nice-to-have): a DELETE /tasks/{task_id} that flags CANCELLED and the worker checks this flag between subtasks.
+  •  Logs: store short logs per step for diagnostics.
+
+  8.  Async where it matters
+  •  Use httpx/aiohttp for concurrent scraping and I/O.
+  •  If any heavy CPU bits (e.g., embeddings), run them in a process pool or separate worker to avoid blocking the event loop.
+
+
+  9.  Schema you’ll need (plain JSON)
+  •  Create response: { task_id, state, percent }
+  •  Status response: { task_id, state, percent, current_step, agent_id?, error_message? }
+  •  States: QUEUED | RUNNING | SUCCESS | FAILED | CANCELLED.
+
+ 
