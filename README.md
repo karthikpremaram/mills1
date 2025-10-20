@@ -8,3 +8,8 @@ activate .venv : source .venv/bin/activate
 
 
 /mnt/c/Users/karthik/Documents/GitHub/millis
+
+
+
+- PYTHONPATH=src arq core.arq_worker.WorkerSettings
+- docker run -p 6379:6379 -d redis:7

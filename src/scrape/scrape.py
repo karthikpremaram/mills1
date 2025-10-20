@@ -3,10 +3,12 @@
 import re
 import os
 import re
+import math 
+from src.jobs.redis_state import set_task_state
 from pathlib import Path
 from markdownify import markdownify  # cSpell:disable-line
 from crawl4ai import AsyncWebCrawler
-from playwright.async_api import async_playwright, Error
+from playwright.async_api import async_playwright
 from langchain_community.document_transformers import Html2TextTransformer
 from langchain_core.documents import Document # type: ignore
 from src.scrape.llm import refine_with_llm
@@ -55,15 +57,18 @@ def clean_text_for_kb(text: str) -> str:
 
 
 def get_filename(url: str, output_dir: str) -> str:
-    paths = os.listdir(dir)
+    os.makedirs(output_dir, exist_ok=True)
+    paths = os.listdir(output_dir)
     if len(paths) == 0:
-        return dir + "/0.md"
+        return os.path.join(output_dir, "0.md")
     else:
-        path = max(list(map(lambda x: int(x.replace(".md", "")), paths)))
         try:
-            return dir + "/" + str(int(path) + 1) + ".md"
-        except:
-            return dir + "/" + str(100 + 1) + ".md"
+            path = max([int(x.replace(".md", "")) for x in paths if x.endswith(".md")])
+            return os.path.join(output_dir, f"{path + 1}.md")
+        except Exception:
+            # fallback if no numeric filenames exist
+            return os.path.join(output_dir, "100.md")
+
         
 
 # def get_filename(url: str, output_dir: str) -> str:
@@ -181,30 +186,56 @@ async def scrape(cur_url, purpose):
 
 
 
-async def scrape_urls(
-    urls, purpose="kb", output_dir: str = "./markdown_content"
-):
-    """Scrape one or multiple URLs using crawl4ai/playwright and save the output."""
 
+async def scrape_urls(
+    urls,
+    redis=None,
+    task_id: str = None,
+    step_name: str = None,
+    step_weight: int = None,
+    purpose="kb",
+    output_dir: str = "./markdown_content"
+):
+    """
+    Scrape one or multiple URLs and optionally update progress in Redis.
+    Each URL contributes proportionally to the step's weight if provided.
+    """
     scraped_content = ""
 
-    # Handle both single URL and list of URLs
     if not isinstance(urls, list):
         urls = [urls]
 
     no_of_links = len(urls)
+    per_link_percent = (step_weight / no_of_links) if (step_weight and no_of_links) else 0
+    current_percent = 0.0
 
     for i, url in enumerate(urls, start=1):
         print("--" * 20)
         if no_of_links > 1:
             print(f"Scraping {i}/{no_of_links}: {url}")
 
-        cleaned_text, _ = await scrape(url, purpose)
-        scraped_content += cleaned_text or ""
-
         try:
+            cleaned_text, _ = await scrape(url, purpose)
+            scraped_content += cleaned_text or ""
             save_file(cleaned_text, url, output_dir)
-        except Exception as e:  # pylint: disable=broad-exception-caught
-            print(f"Exception while saving scraped content from {url}: {e}")
+
+            # ------------------ update progress if redis/task_id provided ------------------
+            if redis and task_id and step_name and step_weight:
+                current_percent += per_link_percent
+                step_progress = min(math.ceil(current_percent), step_weight)
+                await set_task_state(redis, task_id, {
+                    "current_step": step_name,
+                    "percent": step_progress,
+                    "details": f"Scraped {i}/{no_of_links} URLs"
+                })
+
+        except Exception as e:
+            print(f"Error scraping {url}: {e}")
+            if redis and task_id:
+                await set_task_state(redis, task_id, {
+                    "state": "FAILED",
+                    "error_message": f"Error scraping {url}: {e}"
+                })
+            raise
 
     return scraped_content

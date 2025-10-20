@@ -1,6 +1,5 @@
 """agent functionality"""
 import os
-import asyncio
 from langchain.chat_models import init_chat_model
 from src.agent_config.agent_graph import AgentGraph
 from src.agent_config.agent_tools import (
@@ -10,6 +9,7 @@ from src.agent_config.agent_tools import (
     save_links,
     scrape_and_clean,
 )
+from src.jobs.redis_state import set_task_state
 from src.scrape.scrape import scrape_urls
 from src.core.config import Config
 from src.core.prompts import FIXED_PROMPT, SYSTEM_PROMPT
@@ -55,7 +55,7 @@ async def create_system_prompt_important_links(url: str):
 
         # System & user messages
         config = {"configurable": {"thread_id": "1"}}
-        result = await agent.invoke(
+        result = agent.invoke(
             {
                 "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
@@ -71,17 +71,8 @@ async def create_system_prompt_important_links(url: str):
             raise ValueError("Agent did not return a valid assistant prompt")
 
         # Ensure assistant_prompt is a string before splitlines
-        if isinstance(assistant_prompt, list):
-            assistant_prompt = "\n".join(map(str, assistant_prompt))
-        else:
-            assistant_prompt = str(assistant_prompt)
-            
-        # Prepend FIXED_PROMPT to the first line
-        lines = assistant_prompt.splitlines()
-        if lines:
-            assistant_prompt = "\n".join([lines[0], FIXED_PROMPT, *lines[1:]])
-        else:
-            assistant_prompt = FIXED_PROMPT
+        lst = assistant_prompt.split("\n")
+        assistant_prompt = lst[0]+"\n"+FIXED_PROMPT+"\n".join(lst[1:])
 
         # Save prompt to file
         company = COMPANY_NAMES[0] if COMPANY_NAMES else "unknown_company"
@@ -99,14 +90,19 @@ async def create_system_prompt_important_links(url: str):
         raise
 
 
-async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict):
-    """Scrape and clean links for knowledge base."""
+async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict, redis, task_id: str):
+    """Scrape and clean links for knowledge base with progress tracking."""
     try:
-        # Await the async scraper function
+        urls = IMPORTANT_LINKS.get("links", [])
+
         kb = await scrape_urls(
-            IMPORTANT_LINKS.get("links", []),
+            urls,
+            redis=redis,
+            task_id=task_id,
+            step_name="create_knowledge_base",
+            step_weight=20,  # same as STEPS[1]
             purpose="kb",
-            output_dir=f"agent_content/{company_name}",
+            output_dir=f"markdown_content/{company_name}"
         )
 
         print(f"Knowledge base length: {len(kb)} characters")
@@ -120,4 +116,5 @@ async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict):
 
     except Exception as e:
         print(f"Error in get_knowledge_base: {e}")
+        await set_task_state(redis, task_id, {"state": "FAILED", "error_message": str(e)})
         raise

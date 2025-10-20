@@ -87,9 +87,7 @@ def scrape_and_clean(url: str) -> str:
     try:
         # Store markdown files in markdown_content directory
         scraped_content = asyncio.run(
-            scrape_urls(
-                url, purpose="prompt", output_dir=f"markdown_content/{company}"
-            )
+            scrape_urls(url, purpose="prompt", output_dir=f"markdown_content/{company}")
         )
         return scraped_content
     except Exception as e:  # pylint: disable=broad-exception-caught
@@ -118,4 +116,3 @@ def save_links(values: LinksInput) -> str:
     except OSError as err:
         print(f"Error saving important links: {err}")
         return f"Error saving links: {err}"
-
