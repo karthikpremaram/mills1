@@ -1,4 +1,5 @@
 """agent functionality"""
+
 import os
 from langchain.chat_models import init_chat_model
 from src.agent_config.agent_graph import AgentGraph
@@ -10,6 +11,7 @@ from src.agent_config.agent_tools import (
     scrape_and_clean,
 )
 from src.jobs.redis_state import set_task_state
+from src.logger.logger import logger
 from src.scrape.scrape import scrape_urls
 from src.core.config import Config
 from src.core.prompts import FIXED_PROMPT, SYSTEM_PROMPT
@@ -40,12 +42,13 @@ async def create_system_prompt_important_links(url: str):
     """
     try:
         # Create agent
+        logger.info("Creating agent for URL: %s", url)
         agent_graph = AgentGraph(cost_tracking_llm, tools)
         agent = await agent_graph.create_agent()
-        print("✅ Agent created successfully")
-        print("*" * 40)
+        logger.info("✅ Agent created successfully")
 
         # Construct dynamic user prompt
+        logger.debug("Constructing user prompt for URL: %s", url)
         prompt = f"""
         Go through the URL and give a prompt like the reference below.
         Main URL: {url}
@@ -55,6 +58,7 @@ async def create_system_prompt_important_links(url: str):
 
         # System & user messages
         config = {"configurable": {"thread_id": "1"}}
+        logger.debug("Invoking agent with system and user messages")
         result = agent.invoke(
             {
                 "messages": [
@@ -68,32 +72,45 @@ async def create_system_prompt_important_links(url: str):
         assistant_prompt = result["messages"][-1].content
 
         if not assistant_prompt:
+            logger.error("Agent returned empty prompt for URL: %s", url)
             raise ValueError("Agent did not return a valid assistant prompt")
 
         # Ensure assistant_prompt is a string before splitlines
         lst = assistant_prompt.split("\n")
-        assistant_prompt = lst[0]+"\n"+FIXED_PROMPT+"\n".join(lst[1:])
+        assistant_prompt = lst[0] + "\n" + FIXED_PROMPT + "\n".join(lst[1:])
+        logger.debug(
+            "Generated assistant prompt length: %d chars", len(assistant_prompt)
+        )
 
         # Save prompt to file
         company = COMPANY_NAMES[0] if COMPANY_NAMES else "unknown_company"
         path = os.path.join("agent_content", company)
         os.makedirs(path, exist_ok=True)
         file_path = os.path.join(path, "prompt.txt")
+
+        logger.debug("Saving system prompt to: %s", file_path)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(assistant_prompt)
 
-        print(f"System prompt saved: {file_path}")
+        logger.info("System prompt successfully generated and saved")
         return assistant_prompt, IMPORTANT_LINKS
 
     except Exception as e:
-        print(f"Error in agent_action: {e}")
+        logger.error("Error in agent_action for %s: %s", url, str(e), exc_info=True)
         raise
 
 
-async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict, redis, task_id: str):
+async def get_knowledge_base(
+    company_name: str, IMPORTANT_LINKS: dict, redis, task_id: str
+):
     """Scrape and clean links for knowledge base with progress tracking."""
     try:
         urls = IMPORTANT_LINKS.get("links", [])
+        logger.info(
+            "Starting knowledge base creation for %s with %d URLs",
+            company_name,
+            len(urls),
+        )
 
         kb = await scrape_urls(
             urls,
@@ -102,19 +119,27 @@ async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict, redis, ta
             step_name="create_knowledge_base",
             step_weight=20,  # same as STEPS[1]
             purpose="kb",
-            output_dir=f"markdown_content/{company_name}"
+            output_dir=f"markdown_content/{company_name}",
         )
 
-        print(f"Knowledge base length: {len(kb)} characters")
+        logger.info("Generated knowledge base of %d characters", len(kb))
 
         path = f"agent_content/{company_name}/kb.txt"
+        logger.debug("Saving knowledge base to: %s", path)
         with open(path, "w", encoding="utf-8") as f:
             f.write(kb)
 
-        print(f"Knowledge base stored at: {path}")
+        logger.info("Knowledge base successfully stored at: %s", path)
         return kb
 
     except Exception as e:
-        print(f"Error in get_knowledge_base: {e}")
-        await set_task_state(redis, task_id, {"state": "FAILED", "error_message": str(e)})
+        logger.error(
+            "Error in get_knowledge_base for %s: %s",
+            company_name,
+            str(e),
+            exc_info=True,
+        )
+        await set_task_state(
+            redis, task_id, {"state": "FAILED", "error_message": str(e)}
+        )
         raise
