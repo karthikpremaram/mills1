@@ -43,7 +43,7 @@ class Payload:
                     "interruption": {
                         "allowed": True,
                         "keep_interruption_message": True,
-                        "first_messsage": True,
+                        "first_message": True,
                     },
                     "response_delay": {"generic_delay": 100, "number_input_delay": 100},
                     "inactivity_handling": {

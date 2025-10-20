@@ -1,6 +1,19 @@
 import json
 from io import BytesIO
 import httpx
+from src.logging.logger import logger
+
+
+async def _safe_json(response: httpx.Response) -> dict:
+    """Safely parse JSON; return {} if empty or invalid."""
+    try:
+        if not response.text.strip():
+            logger.warning("Empty response body from %s", response.url)
+            return {}
+        return response.json()
+    except json.JSONDecodeError:
+        logger.warning("Non-JSON response from %s: %s", response.url, response.text)
+        return {}
 
 
 async def create_millis_assistant(payload, api_key):
@@ -12,7 +25,7 @@ async def create_millis_assistant(payload, api_key):
             json=payload,
         )
         response.raise_for_status()
-        return response.json()
+        return await _safe_json(response)
 
 
 async def generate_presigned_url(api_key, filename):
@@ -22,14 +35,12 @@ async def generate_presigned_url(api_key, filename):
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()
+        return await _safe_json(response)
 
 
 async def upload_text_to_s3(s3_url, fields, text, file_name="data.txt"):
-    if isinstance(text, str):
-        file_bytes = text.encode("utf-8")
-    else:
-        file_bytes = text
+    """Upload text or bytes to S3 using presigned URL."""
+    file_bytes = text.encode("utf-8") if isinstance(text, str) else text
     file_obj = BytesIO(file_bytes)
     files = {"file": (file_name, file_obj)}
 
@@ -39,22 +50,11 @@ async def upload_text_to_s3(s3_url, fields, text, file_name="data.txt"):
         return response
 
 
-async def set_knowledge_base(api_key, assistant_id, file_id, messages):
-    url = "https://api-eu-west.millis.ai/knowledge/set_agent_files"
-    payload = {"agent_id": assistant_id, "files": [file_id], "messages": [messages]}
-    headers = {"Authorization": api_key, "Content-Type": "application/json"}
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response
-
-
 async def create_file_in_millis(params):
     url = "https://api-west.millis.ai/knowledge/create_file"
     headers = {
         "Authorization": params["API_KEY"],
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     payload = {
         "agent_id": params["assistant_id"],
@@ -65,25 +65,35 @@ async def create_file_in_millis(params):
         "size": params["file_size"],
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(url, headers=headers, json=payload)
         response.raise_for_status()
-        return response.json()
+        return await _safe_json(response)
 
 
 async def set_knowledge_base(api_key, assistant_id, file_id, messages):
+    """Assign uploaded files as KB for the assistant."""
     url = "https://api-eu-west.millis.ai/knowledge/set_agent_files"
     headers = {
         "Authorization": api_key,
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
     payload = {
         "agent_id": assistant_id,
         "files": [file_id],
-        "messages": [messages]
+        "messages": [messages],
     }
 
-    async with httpx.AsyncClient() as client:
+    async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
+
+        # Even if the API returns no JSON, don’t crash
+        if response.status_code >= 400:
+            logger.error(
+                "Failed to set KB (status %s): %s",
+                response.status_code,
+                response.text,
+            )
+            response.raise_for_status()
+
+        return await _safe_json(response)

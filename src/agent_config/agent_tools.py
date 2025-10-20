@@ -88,7 +88,7 @@ def scrape_and_clean(url: str) -> str:
         # Store markdown files in markdown_content directory
         scraped_content = asyncio.run(
             scrape_urls(
-                url, refine_with_llm=False, output_dir=f"markdown_content/{company}"
+                url, purpose="prompt", output_dir=f"markdown_content/{company}"
             )
         )
         return scraped_content

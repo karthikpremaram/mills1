@@ -1,5 +1,5 @@
 """agent functionality"""
-
+import os
 import asyncio
 from langchain.chat_models import init_chat_model
 from src.agent_config.agent_graph import AgentGraph
@@ -30,10 +30,16 @@ cost_tracking_llm = CostTrackingLLM(llm)
 tools = [scrape_and_clean, save_links, create_directory]
 
 
-async def agent_action(url: str):
-    """Agent to create system prompt and provide URLs for knowledge base."""
+async def create_system_prompt_important_links(url: str):
+    """
+    Agent to create system prompt and provide URLs for knowledge base.
 
+    Returns:
+        assistant_prompt (str): Final system prompt
+        IMPORTANT_LINKS (list): List of important links extracted by the agent
+    """
     try:
+        # Create agent
         agent_graph = AgentGraph(cost_tracking_llm, tools)
         agent = await agent_graph.create_agent()
         print("✅ Agent created successfully")
@@ -48,44 +54,58 @@ async def agent_action(url: str):
         """
 
         # System & user messages
-        messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt.strip()},
-        ]
-
-        # Agent configuration
         config = {"configurable": {"thread_id": "1"}}
+        result = await agent.invoke(
+            {
+                "messages": [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ]
+            },
+            config,
+            stream_mode="values",
+        )
+        assistant_prompt = result["messages"][-1].content
 
-        result = await agent.ainvoke({"messages": messages}, config=config)
-
-        assistant_prompt = result.get("messages", [])[-1].content if isinstance(result, dict) else str(result)
         if not assistant_prompt:
             raise ValueError("Agent did not return a valid assistant prompt")
 
-
+        # Ensure assistant_prompt is a string before splitlines
+        if isinstance(assistant_prompt, list):
+            assistant_prompt = "\n".join(map(str, assistant_prompt))
+        else:
+            assistant_prompt = str(assistant_prompt)
+            
+        # Prepend FIXED_PROMPT to the first line
         lines = assistant_prompt.splitlines()
-        assistant_prompt = "\n".join([lines[0], FIXED_PROMPT, *lines[1:]])
+        if lines:
+            assistant_prompt = "\n".join([lines[0], FIXED_PROMPT, *lines[1:]])
+        else:
+            assistant_prompt = FIXED_PROMPT
 
-
+        # Save prompt to file
         company = COMPANY_NAMES[0] if COMPANY_NAMES else "unknown_company"
-        path = f"agent_content/{company}/prompt.txt"
-        with open(path, "w", encoding="utf-8") as f:
+        path = os.path.join("agent_content", company)
+        os.makedirs(path, exist_ok=True)
+        file_path = os.path.join(path, "prompt.txt")
+        with open(file_path, "w", encoding="utf-8") as f:
             f.write(assistant_prompt)
 
-        print(f"System prompt saved: {path}")
+        print(f"System prompt saved: {file_path}")
         return assistant_prompt, IMPORTANT_LINKS
 
     except Exception as e:
         print(f"Error in agent_action: {e}")
         raise
 
-async def get_knowledge_base(company_name: str, important_links: dict):
+
+async def get_knowledge_base(company_name: str, IMPORTANT_LINKS: dict):
     """Scrape and clean links for knowledge base."""
     try:
         # Await the async scraper function
         kb = await scrape_urls(
-            important_links.get("links", []),
-            refine_with_llm=True,
+            IMPORTANT_LINKS.get("links", []),
+            purpose="kb",
             output_dir=f"agent_content/{company_name}",
         )
 

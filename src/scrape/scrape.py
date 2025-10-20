@@ -2,15 +2,18 @@
 
 import re
 import os
+import re
+from pathlib import Path
 from markdownify import markdownify  # cSpell:disable-line
 from crawl4ai import AsyncWebCrawler
 from playwright.async_api import async_playwright, Error
 from langchain_community.document_transformers import Html2TextTransformer
-from langchain.schema import Document
+from langchain_core.documents import Document # type: ignore
+from src.scrape.llm import refine_with_llm
+
 
 
 def clean_text_for_prompt(content):
-    """remove the html tags from the content"""
     html2text = Html2TextTransformer(ignore_links=False)
     doc = Document(page_content=content)
     clean_doc = html2text.transform_documents([doc])[0]
@@ -49,17 +52,48 @@ def clean_text_for_kb(text: str) -> str:
     return text.strip()
 
 
-def get_filename(url, output_dir):  # pylint: disable=unused-argument
-    """get the markdown file name"""
-    paths = os.listdir(output_dir)
+
+
+def get_filename(url: str, output_dir: str) -> str:
+    paths = os.listdir(dir)
     if len(paths) == 0:
-        return output_dir + "/0.md"
+        return dir + "/0.md"
     else:
-        path = max(list(map(lambda x: int(re.findall(r"\d+", x)[0])), paths))
+        path = max(list(map(lambda x: int(x.replace(".md", "")), paths)))
         try:
-            return output_dir + "/" + str(int(path) + 1) + ".md"
-        except ValueError:
-            return output_dir + "/" + str(101) + ".md"
+            return dir + "/" + str(int(path) + 1) + ".md"
+        except:
+            return dir + "/" + str(100 + 1) + ".md"
+        
+
+# def get_filename(url: str, output_dir: str) -> str:
+#     """
+#     Generate the next markdown filename in numeric sequence (e.g., 0.md, 1.md, 2.md).
+
+#     Args:
+#         url (str): (Unused) URL input, kept for compatibility.
+#         output_dir (str): Path to the output directory.
+
+#     Returns:
+#         str: Full path to the next markdown file.
+#     """
+#     output_path = Path(output_dir)
+#     output_path.mkdir(parents=True, exist_ok=True)
+
+#     # Collect all numeric parts from markdown filenames
+#     md_files = [f for f in output_path.iterdir() if f.is_file() and f.suffix == ".md"]
+#     numbers = [
+#         int(match.group(1))
+#         for f in md_files
+#         if (match := re.search(r"(\d+)", f.stem))
+#     ]
+
+#     # Compute the next available number safely
+#     next_num = (max(numbers) + 1) if numbers else 0
+#     next_file = output_path / f"{next_num}.md"
+
+#     return str(next_file)
+
 
 
 def save_file(md, url, output_dir="./markdown_content"):
@@ -74,38 +108,35 @@ def remove_header_footer(html_text: str) -> str:
     return re.sub(r"<(header|footer)[\s\S]*?</\1>", "", html_text, flags=re.I)
 
 
-async def crawl(cur_url, refine_with_llm: bool):
+
+async def crawl(cur_url, purpose):
     """Fetch markdown content for a single URL using crawl4ai."""
     try:
         print(f"--> Crawl: Extracting content from {cur_url}")
         excluded_tags = []
-        if not refine_with_llm:
+        if purpose != "prompt":
             excluded_tags = ["header", "footer"]
         async with AsyncWebCrawler() as crawler:
-            result = await crawler.arun(
-                cur_url, excluded_tags=excluded_tags
-            )  # cSpell:disable-line
+            result = await crawler.arun(cur_url, excluded_tags=excluded_tags)
             if not result or not result.markdown:
                 raise ValueError("No markdown found")
             cleaned = ""
-            if refine_with_llm:
+            if purpose == "prompt":
+                print("-->cleaning for prompt")
+                cleaned = clean_text_for_prompt(result.html)
+            else:
                 print("--> cleaning and refining for kb")
                 cleaned = clean_text_for_kb(result.markdown)
                 cleaned = refine_with_llm(cleaned)
-            else:
-                print("-->cleaning for prompt")
-                cleaned = clean_text_for_prompt(result.html)
 
             print(f"--> {len(cleaned)} chars extracted")
             return cleaned, result.html
-    except Error as e:
-        print("error", e)
-        raise RuntimeError(
-            f"failed to extract the content from {cur_url}", "error :", e
-        ) from e
+    except Exception as e:
+        raise RuntimeError(f"Crawl failed for {cur_url}: {e}") from e
 
 
-async def playwright(cur_url, refine_with_llm: bool):
+
+async def playwright(cur_url, purpose):
     """Fetch markdown content for a single URL using playwright."""
     try:
         print(f"-->Playwright: Extracting content from {cur_url}")
@@ -115,48 +146,43 @@ async def playwright(cur_url, refine_with_llm: bool):
             await page.goto(cur_url, timeout=30000)
             html = await page.content()
             cleaned = ""
-            if refine_with_llm:
-                print("--> cleaning and refining for kb")
-                cleaned = markdownify(html)  # cSpell:disable-line
-                cleaned = clean_text_for_kb(cleaned)
-                cleaned = refine_with_llm(cleaned)
-            else:
+            if purpose == "prompt":
                 print("--> cleaning for prompt")
                 cleaned = clean_text_for_prompt(html)
-
+            else:
+                print("--> cleaning and refining for kb")
+                cleaned = markdownify(html)
+                cleaned = clean_text_for_kb(cleaned)
+                cleaned = refine_with_llm(cleaned)
             print(f"--> {len(cleaned)} chars extracted")
             await browser.close()
             return cleaned, html
-    except Error as e:
-        raise RuntimeError(
-            f"Failed to extract content from {cur_url}", "error :", e
-        ) from e
+    except Exception as e:
+        raise e
 
 
-async def scrape(cur_url: str, refine_with_llm: bool):
-    """Scrape the content using crawl4ai or fallback to playwright."""
+async def scrape(cur_url, purpose):
     md, html = "", ""
-
     try:
         print(f"-->Trying crawl4ai for {cur_url}")
-        md, html = await crawl(cur_url, refine_with_llm)
-
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        print(f"-->crawl4ai failed for {cur_url}: {e},")
-
+        md, html = await crawl(cur_url, purpose)
+    except Exception as e:
+        print(f"-->crawl4ai failed for {cur_url}: {e}")
         try:
             print(f"-->Trying playwright for {cur_url}")
-            md, html = await playwright(cur_url, refine_with_llm)
+            md, html = await playwright(cur_url, purpose)
 
-        except Exception as e2:  # pylint: disable=broad-exception-caught
+        except Exception as e2:
             print(f"-->playwright failed for {cur_url}: {e2}")
             return md, html
 
-    return md
+    return md, html
+
+
 
 
 async def scrape_urls(
-    urls, refine_with_llm: bool = True, output_dir: str = "./markdown_content"
+    urls, purpose="kb", output_dir: str = "./markdown_content"
 ):
     """Scrape one or multiple URLs using crawl4ai/playwright and save the output."""
 
@@ -173,7 +199,7 @@ async def scrape_urls(
         if no_of_links > 1:
             print(f"Scraping {i}/{no_of_links}: {url}")
 
-        cleaned_text = await scrape(url, refine_with_llm)
+        cleaned_text, _ = await scrape(url, purpose)
         scraped_content += cleaned_text or ""
 
         try:
