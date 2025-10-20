@@ -9,11 +9,19 @@ from src.core.config import Config
 from src.core.prompts import KNOWLEDGE_BASE_DESCRIPTION_PROMPT, MARKDOWN_PROMPT
 
 
-llm = init_chat_model(
-    "openai:gpt-4",
-    api_key=Config.OPENAI_API_KEY,
-)
+# llm = init_chat_model(
+#     "openai:gpt-4",
+#     api_key=Config.OPENAI_API_KEY,
+# )
 
+
+llm = init_chat_model(
+    "google_genai:gemini-2.5-flash",
+    model_kwargs={
+        "api_key": Config.GEMINI_API_KEY,
+        "streaming": True,
+    },
+)
 
 cost_tracking_llm = CostTrackingLLM(llm, Config.OPENAI_MODEL_NAME)
 

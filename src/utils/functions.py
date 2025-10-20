@@ -1,8 +1,7 @@
 import json
 from io import BytesIO
 import httpx
-from src.logging.logger import logger
-
+from src.logger.logger import logger
 
 async def _safe_json(response: httpx.Response) -> dict:
     """Safely parse JSON; return {} if empty or invalid."""

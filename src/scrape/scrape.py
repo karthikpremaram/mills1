@@ -1,18 +1,17 @@
 """scrape the website content using playwright and craw4ai"""
 
-import re
 import os
 import re
-import math 
-from src.jobs.redis_state import set_task_state
-from pathlib import Path
-from markdownify import markdownify  # cSpell:disable-line
+import math
 from crawl4ai import AsyncWebCrawler
 from playwright.async_api import async_playwright
 from langchain_community.document_transformers import Html2TextTransformer
-from langchain_core.documents import Document # type: ignore
-from src.scrape.llm import refine_with_llm
+from langchain_core.documents import Document  # type: ignore
+from markdownify import markdownify  # cSpell:disable-line
 
+from src.scrape.llm import refine_with_llm
+from src.logger.logger import logger
+from src.jobs.redis_state import set_task_state
 
 
 def clean_text_for_prompt(content):
@@ -54,9 +53,8 @@ def clean_text_for_kb(text: str) -> str:
     return text.strip()
 
 
-
-
 def get_filename(url: str, output_dir: str) -> str:
+    """ name the file """
     os.makedirs(output_dir, exist_ok=True)
     paths = os.listdir(output_dir)
     if len(paths) == 0:
@@ -69,7 +67,6 @@ def get_filename(url: str, output_dir: str) -> str:
             # fallback if no numeric filenames exist
             return os.path.join(output_dir, "100.md")
 
-        
 
 # def get_filename(url: str, output_dir: str) -> str:
 #     """
@@ -100,7 +97,6 @@ def get_filename(url: str, output_dir: str) -> str:
 #     return str(next_file)
 
 
-
 def save_file(md, url, output_dir="./markdown_content"):
     """save the markdown file"""
     file_name = get_filename(url, output_dir)
@@ -113,11 +109,10 @@ def remove_header_footer(html_text: str) -> str:
     return re.sub(r"<(header|footer)[\s\S]*?</\1>", "", html_text, flags=re.I)
 
 
-
 async def crawl(cur_url, purpose):
     """Fetch markdown content for a single URL using crawl4ai."""
     try:
-        print(f"--> Crawl: Extracting content from {cur_url}")
+        logger.info("Crawl: Extracting content from %s", cur_url)
         excluded_tags = []
         if purpose != "prompt":
             excluded_tags = ["header", "footer"]
@@ -127,24 +122,24 @@ async def crawl(cur_url, purpose):
                 raise ValueError("No markdown found")
             cleaned = ""
             if purpose == "prompt":
-                print("-->cleaning for prompt")
+                logger.debug("Processing content for prompt")
                 cleaned = clean_text_for_prompt(result.html)
             else:
-                print("--> cleaning and refining for kb")
+                logger.debug("Processing content for knowledge base")
                 cleaned = clean_text_for_kb(result.markdown)
                 cleaned = refine_with_llm(cleaned)
 
-            print(f"--> {len(cleaned)} chars extracted")
+            logger.info("Extracted %d characters from %s", len(cleaned), cur_url)
             return cleaned, result.html
     except Exception as e:
+        logger.error("Crawl failed for %s: %s", cur_url, str(e))
         raise RuntimeError(f"Crawl failed for {cur_url}: {e}") from e
-
 
 
 async def playwright(cur_url, purpose):
     """Fetch markdown content for a single URL using playwright."""
     try:
-        print(f"-->Playwright: Extracting content from {cur_url}")
+        logger.info("Playwright: Extracting content from %s", cur_url)
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page()
@@ -152,39 +147,37 @@ async def playwright(cur_url, purpose):
             html = await page.content()
             cleaned = ""
             if purpose == "prompt":
-                print("--> cleaning for prompt")
+                logger.debug("Processing content for prompt")
                 cleaned = clean_text_for_prompt(html)
             else:
-                print("--> cleaning and refining for kb")
+                logger.debug("Processing content for knowledge base")
                 cleaned = markdownify(html)
                 cleaned = clean_text_for_kb(cleaned)
                 cleaned = refine_with_llm(cleaned)
-            print(f"--> {len(cleaned)} chars extracted")
+            logger.info("Extracted %d characters from %s", len(cleaned), cur_url)
             await browser.close()
             return cleaned, html
     except Exception as e:
+        logger.error("Playwright failed for %s: %s", cur_url, str(e))
         raise e
 
 
 async def scrape(cur_url, purpose):
+    """Main scraping function that tries crawl4ai first, then falls back to playwright."""
     md, html = "", ""
     try:
-        print(f"-->Trying crawl4ai for {cur_url}")
+        logger.info("Attempting to scrape %s with crawl4ai", cur_url)
         md, html = await crawl(cur_url, purpose)
     except Exception as e:
-        print(f"-->crawl4ai failed for {cur_url}: {e}")
+        logger.warning("crawl4ai failed for %s: %s", cur_url, str(e))
         try:
-            print(f"-->Trying playwright for {cur_url}")
+            logger.info("Falling back to playwright for %s", cur_url)
             md, html = await playwright(cur_url, purpose)
-
         except Exception as e2:
-            print(f"-->playwright failed for {cur_url}: {e2}")
+            logger.error("All scraping methods failed for %s: %s", cur_url, str(e2))
             return md, html
 
     return md, html
-
-
-
 
 
 async def scrape_urls(
@@ -194,7 +187,7 @@ async def scrape_urls(
     step_name: str = None,
     step_weight: int = None,
     purpose="kb",
-    output_dir: str = "./markdown_content"
+    output_dir: str = "./markdown_content",
 ):
     """
     Scrape one or multiple URLs and optionally update progress in Redis.
@@ -206,13 +199,15 @@ async def scrape_urls(
         urls = [urls]
 
     no_of_links = len(urls)
-    per_link_percent = (step_weight / no_of_links) if (step_weight and no_of_links) else 0
+    per_link_percent = (
+        (step_weight / no_of_links) if (step_weight and no_of_links) else 0
+    )
     current_percent = 0.0
 
+    logger.info("Starting batch scrape of %d URLs", no_of_links)
+
     for i, url in enumerate(urls, start=1):
-        print("--" * 20)
-        if no_of_links > 1:
-            print(f"Scraping {i}/{no_of_links}: {url}")
+        logger.info("Processing URL %d/%d: %s", i, no_of_links, url)
 
         try:
             cleaned_text, _ = await scrape(url, purpose)
@@ -223,19 +218,29 @@ async def scrape_urls(
             if redis and task_id and step_name and step_weight:
                 current_percent += per_link_percent
                 step_progress = min(math.ceil(current_percent), step_weight)
-                await set_task_state(redis, task_id, {
-                    "current_step": step_name,
-                    "percent": step_progress,
-                    "details": f"Scraped {i}/{no_of_links} URLs"
-                })
+                progress_details = f"Scraped {i}/{no_of_links} URLs"
+                logger.debug(
+                    "Updating progress: %s - %d%%", progress_details, step_progress
+                )
+                await set_task_state(
+                    redis,
+                    task_id,
+                    {
+                        "current_step": step_name,
+                        "percent": step_progress,
+                        "details": progress_details,
+                    },
+                )
 
         except Exception as e:
-            print(f"Error scraping {url}: {e}")
+            logger.error("Failed to scrape %s: %s", url, str(e))
             if redis and task_id:
-                await set_task_state(redis, task_id, {
-                    "state": "FAILED",
-                    "error_message": f"Error scraping {url}: {e}"
-                })
+                error_msg = f"Error scraping {url}: {e}"
+                logger.error("Setting task failure state: %s", error_msg)
+                await set_task_state(
+                    redis, task_id, {"state": "FAILED", "error_message": error_msg}
+                )
             raise
 
+    logger.info("Completed batch scrape of %d URLs", no_of_links)
     return scraped_content

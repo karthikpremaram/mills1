@@ -1,6 +1,7 @@
 """calculate the cost per token"""
 
 from langchain_core.runnables import Runnable
+from src.logger.logger import logger
 
 
 def calc_cost(input_tokens, output_tokens, model_name):
@@ -19,7 +20,7 @@ def calc_cost(input_tokens, output_tokens, model_name):
         rate_out = 2.50 / 1_000_000
 
     else:
-        print("Assign cost for input and output tokens")
+        logger.warning("Unknown model %s - cannot calculate token costs", model_name)
         return None, None
 
     return round(input_tokens * rate_in, 6), round(output_tokens * rate_out, 6)
@@ -48,14 +49,16 @@ class CostTrackingLLM(Runnable):
         input_cost, output_cost = calc_cost(
             input_tokens, output_tokens, model_name=self.model_name
         )
-        print()
-        print("--> model name : ", self.model_name)
-        print(f"input tokens : {input_tokens}, output tokens : {output_tokens}")
-        print(f"input tokens cost : {input_cost}")
-        print(f"output tokens cost : {output_cost}")
-        print(f"combined cost : {input_cost + output_cost}")
-        self.final_cost = self.final_cost + input_cost + output_cost
-        print("cost till now : ", self.final_cost)
+
+        logger.info("Model %s usage:", self.model_name)
+        logger.info("Tokens - Input: %d, Output: %d", input_tokens, output_tokens)
+        logger.debug("Costs - Input: $%.6f, Output: $%.6f", input_cost, output_cost)
+
+        combined_cost = input_cost + output_cost
+        self.final_cost += combined_cost
+        logger.info(
+            "Request cost: $%.6f, Total cost: $%.6f", combined_cost, self.final_cost
+        )
 
         return response
 
