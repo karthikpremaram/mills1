@@ -54,7 +54,7 @@ def clean_text_for_kb(text: str) -> str:
 
 
 def get_filename(url: str, output_dir: str) -> str:
-    """ name the file """
+    """name the file"""
     os.makedirs(output_dir, exist_ok=True)
     paths = os.listdir(output_dir)
     if len(paths) == 0:

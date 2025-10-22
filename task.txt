@@ -61,3 +61,39 @@ state="SUCCESS", percent=100, and store agent_id in the same record so the statu
   •  States: QUEUED | RUNNING | SUCCESS | FAILED | CANCELLED.
 
  
+
+
+ httpx
+asyncio
+langgraph
+pydantic
+markdownify
+playwright
+langchain
+langchain-community
+
+
+langchain-core
+
+requests
+crawl4ai
+fastapi[all]
+arq
+
+
+
+# millis
+
+wsl set up - 
+sudo apt update
+sudo apt install python3-venv
+create .venv :   python3 -m venv my_env_name or sudo python3.12 -m venv .venv
+activate .venv : source .venv/bin/activate
+
+
+/mnt/c/Users/karthik/Documents/GitHub/millis
+
+
+
+- PYTHONPATH=src arq core.arq_worker.WorkerSettings
+- docker run -p 6379:6379 -d redis:7

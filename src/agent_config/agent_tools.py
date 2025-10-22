@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 import shutil
-from typing import List, Dict
+from typing import List
 
 from langchain.tools import tool
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ class LinksInput(BaseModel):
 # Global state
 # -------------------------------
 COMPANY_NAMES: List[str] = []
-IMPORTANT_LINKS: Dict[str, LinksInput] = {}
+IMPORTANT_LINKS: dict = {}
 _LINKS_FILE_COUNTER = 0
 
 
@@ -131,19 +131,53 @@ def save_links(values: LinksInput) -> str:
     global IMPORTANT_LINKS
     company = COMPANY_NAMES[0]
     logger.info("Saving important links for company: %s", company)
+    print("saving links")
+    print(values)
+    print()
 
-    IMPORTANT_LINKS["links"] = values
-    logger.debug("Updated IMPORTANT_LINKS with %d links", len(values.values))
+    # Normalize input: accept LinksInput (pydantic) with .values OR a raw list
+    links_list = None
+    if hasattr(values, "values"):
+        # LinksInput Pydantic model case: values.values is a list
+        links_list = values.values
+    elif isinstance(values, list):
+        # direct list passed
+        links_list = values
+    else:
+        # try to coerce common wrapper types (dict containing 'values' or 'links')
+        try:
+            if isinstance(values, dict) and "values" in values:
+                links_list = values["values"]
+            elif isinstance(values, dict) and "links" in values:
+                links_list = values["links"]
+            else:
+                # fallback: convert to single-item list
+                links_list = [str(values)]
+        except Exception:
+            links_list = [str(values)]
+
+    # ensure it's a list of strings
+    links_list = [str(x).strip() for x in links_list if x is not None and str(x).strip()]
+
+    if links_list:
+        IMPORTANT_LINKS["links"] = links_list
+    else:
+        IMPORTANT_LINKS["links"] = []
+
+    logger.debug("Updated IMPORTANT_LINKS with %d links", len(IMPORTANT_LINKS["links"]))
 
     path = f"agent_content/{company}/important_links.json"
     try:
         logger.debug("Writing links to: %s", path)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump({"links": values}, f, indent=4)
+            json.dump({"links": IMPORTANT_LINKS["links"]}, f, indent=4)
         logger.info("Successfully saved important links to %s", path)
+        print("links saved")
         return "Saved successfully"
-    except OSError as err:
+    except Exception as err:
+        print("saving important links failed")
         logger.error(
             "Error saving important links to %s: %s", path, str(err), exc_info=True
         )
         return f"Error saving links: {err}"
+

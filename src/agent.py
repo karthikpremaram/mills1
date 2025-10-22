@@ -16,6 +16,7 @@ from src.scrape.scrape import scrape_urls
 from src.core.config import Config
 from src.core.prompts import FIXED_PROMPT, SYSTEM_PROMPT
 from src.track_cost.cost_tracking_llm import CostTrackingLLM
+import pickle
 
 
 # ✅ Initialize LLM
@@ -69,15 +70,33 @@ async def create_system_prompt_important_links(url: str):
             config,
             stream_mode="values",
         )
-        assistant_prompt = result["messages"][-1].content
+        print("agent completed")
+        with open("pickle.pkl", "wb") as f:
+            pickle.dump(result, f)
+        # get assistant content safely (could be str or list or other)
+        assistant_content = result["messages"][-1].content
 
-        if not assistant_prompt:
+        # normalize to a single string
+        if isinstance(assistant_content, list):
+            # join with newlines (preserves structure)
+            assistant_prompt = "\n".join(str(x) for x in assistant_content)
+        else:
+            assistant_prompt = str(assistant_content) if assistant_content is not None else ""
+
+        if not assistant_prompt.strip():
             logger.error("Agent returned empty prompt for URL: %s", url)
             raise ValueError("Agent did not return a valid assistant prompt")
 
-        # Ensure assistant_prompt is a string before splitlines
-        lst = assistant_prompt.split("\n")
-        assistant_prompt = lst[0] + "\n" + FIXED_PROMPT + "\n".join(lst[1:])
+        # safely split into lines and insert FIXED_PROMPT after first line
+        lines = assistant_prompt.splitlines()
+        first = lines[0] if lines else ""
+        rest = "\n".join(lines[1:]) if len(lines) > 1 else ""
+        assistant_prompt = first + "\n" + FIXED_PROMPT + ("\n" + rest if rest else "")
+
+        # # Ensure assistant_prompt is a string before splitlines
+        # lst = assistant_prompt.split("\n")
+        # assistant_prompt = lst[0] + "\n" + FIXED_PROMPT + "\n".join(lst[1:])
+        
         logger.debug(
             "Generated assistant prompt length: %d chars", len(assistant_prompt)
         )

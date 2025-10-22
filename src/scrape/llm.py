@@ -24,7 +24,7 @@ llm = init_chat_model(
     },
 )
 
-cost_tracking_llm = CostTrackingLLM(llm, Config.OPENAI_MODEL_NAME)
+cost_tracking_llm = CostTrackingLLM(llm)
 
 markdown_prompt_template = PromptTemplate.from_template(MARKDOWN_PROMPT)
 kb_description_prompt_template = PromptTemplate.from_template(

@@ -4,12 +4,13 @@ from src.core.config import Config
 from src.jobs.tasks import process_agent_creation
 from src.logger.logger import logger
 
+
 class WorkerSettings:
     redis_settings = RedisSettings.from_dsn(Config.REDIS_URL)
     functions = [process_agent_creation]  # <-- FIXED HERE
     max_jobs = 5
     keep_result = 3600
-    job_timeout = 600
+    job_timeout = 1800
 
     @staticmethod
     async def on_startup(ctx):

@@ -1,11 +1,8 @@
 # app.py
-import json
-import uuid
-import asyncio
 from typing import Optional, AsyncIterator
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from arq import create_pool
@@ -92,23 +89,22 @@ async def create_agent(request: CreateAgentRequest):
                         "percent": state.get("percent"),
                     },
                 )
-
     # Enqueue ARQ job
     logger.debug("Creating ARQ pool")
     pool = await create_pool(RedisSettings.from_dsn(Config.REDIS_URL))
-    job_id = str(uuid.uuid4())
-    logger.info("Enqueueing job %s", job_id)
 
-    await pool.enqueue_job(
+    job = await pool.enqueue_job(
         "process_agent_creation",
         request.main_url,
         request.assistant_name,
         request.idempotency_key,
-        job_id=job_id,
     )
+
+    job_id = job.job_id
+
+    logger.info("Enqueueing job %s", job_id)
     await pool.close()
     logger.debug("ARQ pool closed")
-
     # Create initial Redis task record
     initial = {
         "task_id": job_id,
@@ -165,31 +161,3 @@ async def cancel_task(task_id: str):
     return JSONResponse(
         status_code=200, content={"task_id": task_id, "state": "CANCELLED"}
     )
-
-
-# ------------------------------------------------------------
-# GET /tasks/{task_id}/events  → stream real-time updates (SSE)
-# ------------------------------------------------------------
-@app.get("/tasks/{task_id}/events")
-async def task_events(task_id: str):
-    redis: Redis = app.state.redis
-
-    async def event_stream():
-        last_data = None
-        while True:
-            state = await get_task_state(redis, task_id)
-            if not state:
-                yield "event: error\ndata: task_not_found\n\n"
-                return
-
-            payload = json.dumps(state)
-            if payload != last_data:
-                last_data = payload
-                yield f"data: {payload}\n\n"
-                # stop streaming when task finishes
-                if state.get("state") in ("SUCCESS", "FAILED", "CANCELLED"):
-                    return
-
-            await asyncio.sleep(1)
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")

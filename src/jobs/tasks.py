@@ -81,6 +81,7 @@ async def process_agent_creation(
     redis = ctx["redis"]
     task_id = ctx.get("job_id")
     percent = 0.0
+    
 
     logger.info("Starting agent creation task %s for URLs: %s", task_id, urls)
 
@@ -244,7 +245,7 @@ async def process_agent_creation(
         }
         logger.debug("Task %s result: %s", task_id, response)
         return response
-
+        
     except Exception as exc:
         logger.error("Task %s failed: %s", task_id, str(exc), exc_info=True)
         error_msg = str(exc)
