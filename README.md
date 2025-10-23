@@ -1,8 +1,5 @@
 # MILLIS1 — Short README
 
-Purpose
--------
-Create production-ready voice/chat assistants from a website. The system uses a FastAPI API, an ARQ worker, LLMs, and scraping utilities to generate a system prompt, build a knowledge base, create a Millis assistant, upload/register the KB, and track progress via Redis.
 
 Quick setup
 -----------
@@ -23,7 +20,6 @@ Key endpoints
 -------------
 - POST /agents — enqueue assistant creation (payload: {main_url, assistant_name, idempotency_key})
 - GET /tasks/{task_id} — fetch task state and logs
-- GET /tasks/{task_id}/events — SSE stream of task updates
 - DELETE /tasks/{task_id} — cancel a task
 
 Important files
@@ -33,10 +29,3 @@ Important files
 - `src/jobs/tasks.py` — orchestration job
 - `src/agent.py` — agent-driven prompt creation
 - `src/scrape/` — scraping & cleaning
-
-Notes
------
-- Keep secret keys out of source control. Use `.env` or environment variables in production.
-- For browser scraping fallback, install Playwright if needed.
-
-If you want this trimmed further or prefer a one-page quick-reference, tell me which sections to condense.
