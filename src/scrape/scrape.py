@@ -169,7 +169,7 @@ async def scrape(cur_url, purpose):
         logger.info("Attempting to scrape %s with crawl4ai", cur_url)
         md, html = await crawl(cur_url, purpose)
     except Exception as e:
-        logger.warning("crawl4ai failed for %s: %s", cur_url, str(e))
+        logger.warning("crawl4ai failed for %s: %s", cur_url, str(e)) 
         try:
             logger.info("Falling back to playwright for %s", cur_url)
             md, html = await playwright(cur_url, purpose)
@@ -188,23 +188,38 @@ async def scrape_urls(
     step_weight: int = None,
     purpose="kb",
     output_dir: str = "./markdown_content",
+    base_percent: float = 0.0,  # ✅ newly added: percent already achieved before this step
+    total_progress: float = 100.0,  # ✅ overall cap (default 100)
 ):
     """
     Scrape one or multiple URLs and optionally update progress in Redis.
     Each URL contributes proportionally to the step's weight if provided.
+
+    Now includes global progress logic:
+    - base_percent: previous total progress (e.g., 20 after step 1)
+    - step_weight: portion assigned to this step (e.g., 20)
+    - updates Redis percent atomically as each URL finishes
     """
+
     scraped_content = ""
 
     if not isinstance(urls, list):
         urls = [urls]
 
     no_of_links = len(urls)
-    per_link_percent = (
-        (step_weight / no_of_links) if (step_weight and no_of_links) else 0
-    )
-    current_percent = 0.0
+    if no_of_links == 0:
+        logger.warning("No URLs provided for scraping.")
+        return scraped_content
+
+    per_link_increment = step_weight / no_of_links if step_weight else 0
 
     logger.info("Starting batch scrape of %d URLs", no_of_links)
+    logger.debug(
+        "Base percent: %.2f, Step weight: %d, Increment per link: %.2f",
+        base_percent,
+        step_weight or 0,
+        per_link_increment,
+    )
 
     for i, url in enumerate(urls, start=1):
         logger.info("Processing URL %d/%d: %s", i, no_of_links, url)
@@ -216,18 +231,26 @@ async def scrape_urls(
 
             # ------------------ update progress if redis/task_id provided ------------------
             if redis and task_id and step_name and step_weight:
-                current_percent += per_link_percent
-                step_progress = min(math.ceil(current_percent), step_weight)
+                global_percent = base_percent + (i * per_link_increment)
+
+                # Ensure we don’t exceed base + step_weight or total_progress
+                global_percent = min(
+                    global_percent, base_percent + step_weight, total_progress
+                )
+
                 progress_details = f"Scraped {i}/{no_of_links} URLs"
                 logger.debug(
-                    "Updating progress: %s - %d%%", progress_details, step_progress
+                    "Updating global progress: %.2f%% (%s)",
+                    global_percent,
+                    progress_details,
                 )
+
                 await set_task_state(
                     redis,
                     task_id,
                     {
                         "current_step": step_name,
-                        "percent": step_progress,
+                        "percent": math.ceil(global_percent),
                         "details": progress_details,
                     },
                 )

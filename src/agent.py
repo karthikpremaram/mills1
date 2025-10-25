@@ -16,7 +16,6 @@ from src.scrape.scrape import scrape_urls
 from src.core.config import Config
 from src.core.prompts import FIXED_PROMPT, SYSTEM_PROMPT
 from src.track_cost.cost_tracking_llm import CostTrackingLLM
-import pickle
 
 
 # ✅ Initialize LLM
@@ -46,7 +45,7 @@ async def create_system_prompt_important_links(url: str):
         logger.info("Creating agent for URL: %s", url)
         agent_graph = AgentGraph(cost_tracking_llm, tools)
         agent = await agent_graph.create_agent()
-        logger.info("✅ Agent created successfully")
+        logger.info("Agent created successfully")
 
         # Construct dynamic user prompt
         logger.debug("Constructing user prompt for URL: %s", url)
@@ -69,10 +68,10 @@ async def create_system_prompt_important_links(url: str):
             },
             config,
             stream_mode="values",
-        )
-        print("agent completed")
-        with open("pickle.pkl", "wb") as f:
-            pickle.dump(result, f)
+        )   
+        logger.info("Agent work complete successfully")
+
+
         # get assistant content safely (could be str or list or other)
         assistant_content = result["messages"][-1].content
 
@@ -96,7 +95,6 @@ async def create_system_prompt_important_links(url: str):
         # # Ensure assistant_prompt is a string before splitlines
         # lst = assistant_prompt.split("\n")
         # assistant_prompt = lst[0] + "\n" + FIXED_PROMPT + "\n".join(lst[1:])
-        
         logger.debug(
             "Generated assistant prompt length: %d chars", len(assistant_prompt)
         )
@@ -120,11 +118,11 @@ async def create_system_prompt_important_links(url: str):
 
 
 async def get_knowledge_base(
-    company_name: str, IMPORTANT_LINKS: dict, redis, task_id: str
+    company_name: str, important_links: dict, redis, task_id: str
 ):
     """Scrape and clean links for knowledge base with progress tracking."""
     try:
-        urls = IMPORTANT_LINKS.get("links", [])
+        urls = important_links.get("links", [])
         logger.info(
             "Starting knowledge base creation for %s with %d URLs",
             company_name,
@@ -136,13 +134,13 @@ async def get_knowledge_base(
             redis=redis,
             task_id=task_id,
             step_name="create_knowledge_base",
-            step_weight=20,  # same as STEPS[1]
+            step_weight=20,
+            base_percent=20,
             purpose="kb",
             output_dir=f"markdown_content/{company_name}",
         )
-
+        
         logger.info("Generated knowledge base of %d characters", len(kb))
-
         path = f"agent_content/{company_name}/kb.txt"
         logger.debug("Saving knowledge base to: %s", path)
         with open(path, "w", encoding="utf-8") as f:
